@@ -44,7 +44,7 @@ def get_argparser():
                         help='Learning Rate foe learning representations (default: 5e-4)')
     parser.add_argument('--batch-size', type=int, default=64,
                         help='Mini-Batch Size (default: 64)')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--epochs', type=int, default=300,
                         help='Number of epochs for  (default: 100)')
     parser.add_argument('--cuda-id', type=int, default=0,
                         help='CUDA device index')

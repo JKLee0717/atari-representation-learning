@@ -33,11 +33,16 @@ checkpointed_steps_full_sorted = [1536, 1076736, 2151936, 3227136, 4302336, 5377
 
 def get_random_agent_rollouts(env_name, steps, seed=42, num_processes=1, num_frame_stack=1, downsample=False, color=False):
     envs = make_vec_envs(env_name, seed,  num_processes, num_frame_stack, downsample, color)
-    envs.reset();
+    envs.reset()
     episode_rewards = deque(maxlen=10)
+
+    print('Size of Action Space: {}'.format(envs.action_space.n))  # action space 확인
+
     print('-------Collecting samples----------')
+    #print(envs.action_space.n)
     episodes = [[[]] for _ in range(num_processes)]  # (n_processes * n_episodes * episode_len)
     episode_labels = [[[]] for _ in range(num_processes)]
+    actions = [[[]] for _ in range(num_processes)]
     for step in range(steps // num_processes):
         # Take action using a random policy
         action = torch.tensor(
@@ -49,20 +54,26 @@ def get_random_agent_rollouts(env_name, steps, seed=42, num_processes=1, num_fra
                 episode_rewards.append(info['episode']['r'])
 
             if done[i] != 1:
-                episodes[i][-1].append(obs[i].clone())
+                episodes[i][-1].append(obs[i].clone())  
+                actions[i][-1].append(action[i].clone())  # 추가
                 if "labels" in info.keys():
                     episode_labels[i][-1].append(info["labels"])
             else:
                 episodes[i].append([obs[i].clone()])
+                actions[i].append([action[i].clone()])   # 추가
                 if "labels" in info.keys():
                     episode_labels[i].append([info["labels"]])
+            assert len(episodes[i]) == len(actions[i])
 
     # Convert to 2d list from 3d list
     episodes = list(chain.from_iterable(episodes))
     # Convert to 2d list from 3d list
     episode_labels = list(chain.from_iterable(episode_labels))
+    # Convert to 2d list from 3d list
+    actions = list(chain.from_iterable(actions))    
     envs.close()
-    return episodes, episode_labels
+
+    return episodes, episode_labels, actions
 
 
 def get_ppo_rollouts(env_name, steps, seed=42, num_processes=1,
@@ -133,7 +144,7 @@ def get_episodes(env_name,
 
     if collect_mode == "random_agent":
         # List of episodes. Each episode is a list of 160x210 observations
-        episodes, episode_labels = get_random_agent_rollouts(env_name=env_name,
+        episodes, episode_labels, actions = get_random_agent_rollouts(env_name=env_name,
                                                              steps=steps,
                                                              seed=seed,
                                                              num_processes=num_processes,
@@ -159,6 +170,7 @@ def get_episodes(env_name,
     ep_inds = [i for i in range(len(episodes)) if len(episodes[i]) > min_episode_length]
     episodes = [episodes[i] for i in ep_inds]
     episode_labels = [episode_labels[i] for i in ep_inds]
+    actions = [actions[i] for i in ep_inds]
     episode_labels, entropy_dict = remove_low_entropy_labels(episode_labels, entropy_threshold=entropy_threshold)
 
     try:
@@ -174,7 +186,8 @@ def get_episodes(env_name,
         assert len(inds) > 1, "Not enough episodes to split into train and val. You must specify enough steps to get at least two episodes"
         split_ind = int(0.8 * len(inds))
         tr_eps, val_eps = episodes[:split_ind], episodes[split_ind:]
-        return tr_eps, val_eps
+        tr_acts, val_acts = actions[:split_ind], actions[split_ind:] #추가
+        return tr_eps, val_eps, tr_acts, val_acts
 
     if train_mode == "probe":
         val_split_ind, te_split_ind = int(0.7 * len(inds)), int(0.8 * len(inds))
@@ -184,11 +197,13 @@ def get_episodes(env_name,
                                                                                                     te_split_ind:]
         tr_labels, val_labels, test_labels = episode_labels[:val_split_ind], \
                                              episode_labels[val_split_ind:te_split_ind], episode_labels[te_split_ind:]
+        tr_acts, val_acts, test_acts = actions[:val_split_ind], actions[val_split_ind:te_split_ind], actions[te_split_ind:]      # 추가
+
         test_eps, test_labels = remove_duplicates(tr_eps, val_eps, test_eps, test_labels)
         test_ep_inds = [i for i in range(len(test_eps)) if len(test_eps[i]) > 1]
         test_eps = [test_eps[i] for i in test_ep_inds]
         test_labels = [test_labels[i] for i in test_ep_inds]
-        return tr_eps, val_eps, tr_labels, val_labels, test_eps, test_labels
+        return tr_eps, val_eps, tr_labels, val_labels, test_eps, test_labels, tr_acts, val_acts, test_acts 
 
     if train_mode == "dry_run":
         return episodes, episode_labels

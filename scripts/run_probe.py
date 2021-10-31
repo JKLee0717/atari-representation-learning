@@ -12,18 +12,18 @@ from atariari.benchmark.episodes import get_episodes
 
 def run_probe(args):
     wandb.config.update(vars(args))
-    tr_eps, val_eps, tr_labels, val_labels, test_eps, test_labels = get_episodes(steps=args.probe_steps,
-                                                                                 env_name=args.env_name,
-                                                                                 seed=args.seed,
-                                                                                 num_processes=args.num_processes,
-                                                                                 num_frame_stack=args.num_frame_stack,
-                                                                                 downsample=not args.no_downsample,
-                                                                                 color=args.color,
-                                                                                 entropy_threshold=args.entropy_threshold,
-                                                                                 collect_mode=args.probe_collect_mode,
-                                                                                 train_mode="probe",
-                                                                                 checkpoint_index=args.checkpoint_index,
-                                                                                 min_episode_length=args.batch_size)
+    tr_eps, val_eps, tr_labels, val_labels, test_eps, test_labels, tr_acts, val_acts, test_acts = get_episodes(steps=args.probe_steps,
+                                                                                                    env_name=args.env_name,
+                                                                                                    seed=args.seed,
+                                                                                                    num_processes=args.num_processes,
+                                                                                                    num_frame_stack=args.num_frame_stack,
+                                                                                                    downsample=not args.no_downsample,
+                                                                                                    color=args.color,
+                                                                                                    entropy_threshold=args.entropy_threshold,
+                                                                                                    collect_mode=args.probe_collect_mode,
+                                                                                                    train_mode="probe",
+                                                                                                    checkpoint_index=args.checkpoint_index,
+                                                                                                    min_episode_length=args.batch_size)
 
     print("got episodes!")
 
@@ -70,7 +70,6 @@ def run_probe(args):
                                wandb=wandb,
                                fully_supervised=(args.method == "supervised"),
                                save_dir=wandb.run.dir)
-
         trainer.train(tr_eps, val_eps, tr_labels, val_labels)
         test_acc, test_f1score = trainer.test(test_eps, test_labels)
         # trainer = SKLearnProbeTrainer(encoder=encoder)
