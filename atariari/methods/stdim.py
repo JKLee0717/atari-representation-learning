@@ -21,13 +21,34 @@ args = parser.parse_args()
 env_action_space_size = make_vec_envs(args.env_name, args.seed,  args.num_processes, args.num_frame_stack, not args.no_downsample, args.color).action_space.n
 #######################################
 
-class Classifier(nn.Module):
-    def __init__(self, num_inputs1, num_inputs2):
+class Region_Sensitive_Module(nn.Module):  #추가
+    def __init__(self, num_inputs):
         super().__init__()
-        self.network = nn.Bilinear(num_inputs1, num_inputs2, 1)
+        self.conv1_attent = nn.Conv2d(num_inputs, 512, 1)
+        self.conv2_attent = nn.Conv2d(512, 2, 1)
 
-    def forward(self, x1, x2):
-        return self.network(x1, x2)
+    def forward(self, inputs):
+        weights = F.elu(self.conv1_attent(inputs))
+        weights = self.conv2_attent(weights) # (batch, 2, 7, 7)
+        weights = torch.sigmoid(weights)
+        return weights
+
+
+class Action_Classifier(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.final_conv_size = 64 * 9 * 6
+        self.linear1 = nn.Linear(self.final_conv_size, 256)
+        self.linear2 = nn.Linear(256*2, env_action_space_size)
+
+    def forward(self, x1, x2):   
+        x1 = x1.view(x1.size(0), -1)   # 9 x 6 x 64
+        x1 = self.linear1(x1)           # 256
+        x2 = x2.view(x2.size(0), -1)
+        x2 = self.linear1(x2)
+        x = torch.cat([x1, x2], dim=1)  # (64, 512) 어떤 dim으로 concat할지?? 
+        out = self.linear2(x)
+        return out
 
 
 class InfoNCESpatioTemporalTrainer(Trainer):
@@ -37,13 +58,17 @@ class InfoNCESpatioTemporalTrainer(Trainer):
         self.patience = self.config["patience"]
         self.classifier1 = nn.Linear(self.encoder.hidden_size, self.encoder.local_layer_depth).to(device)  # x1 = global, x2=patch, n_channels = 32
         self.classifier2 = nn.Linear(self.encoder.local_layer_depth, self.encoder.local_layer_depth).to(device)
-        self.classifier3 = nn.Linear(self.encoder.hidden_size * 2, env_action_space_size).to(device)  # action classifier , num_of_actions = 6 현재 하드코딩인데.. 나중에 바꿔줘야 할지도??
+        self.classifier3 = Action_Classifier().to(device)
+        self.Region_Sensitive_Module = Region_Sensitive_Module(num_inputs = 64).to(device) 
+
         self.epochs = config['epochs']
         self.batch_size = config['batch_size']
         self.device = device
-        self.optimizer = torch.optim.Adam(list(self.classifier1.parameters()) + list(self.encoder.parameters()) +
-                                          list(self.classifier2.parameters()),
-                                          lr=config['lr'], eps=1e-5)
+        self.optimizer = torch.optim.Adam(list(self.classifier1.parameters()) + list(self.encoder.parameters()) + 
+                                          list(self.classifier2.parameters()) +
+                                          list(self.classifier3.parameters()) + list(self.Region_Sensitive_Module.parameters())  # 추가
+                                          , lr=config['lr'], eps=1e-5)
+
         self.early_stopper = EarlyStopping(patience=self.patience, verbose=False, wandb=self.wandb, name="encoder")
         self.transform = transforms.Compose([Cutout(n_holes=1, length=80)])
 
@@ -111,24 +136,35 @@ class InfoNCESpatioTemporalTrainer(Trainer):
             loss2 = loss2 / (sx * sy)
 
             ######## Loss 3: 새롭게 추가한 부분 ##########
-            f_t_out, f_t_prev_out = f_t_maps['out'], f_t_prev_maps['out']
-            x = torch.cat([f_t_out, f_t_prev_out], dim=1)  # 어떤 dim으로 concat할지?? 
-            net_out = self.classifier3(x)
+            f_t_out, f_t_prev_out = f_t_maps['f7'].permute(0,3,1,2), f_t_prev_maps['f7'].permute(0,3,1,2)  #
+            #print(f_t_out.shape, f_t_prev_out.shape)
+            f_t_RS_weight, f_t_prev_RS_weight = self.Region_Sensitive_Module(f_t_out), self.Region_Sensitive_Module(f_t_prev_out)
+            #Broadcasting
+            f_t_out1 = f_t_out * f_t_RS_weight[:, :1, :, :]
+            f_t_out2 = f_t_out * f_t_RS_weight[:, 1:, :, :]
+            f_t_out = f_t_out1 + f_t_out2 
+            
+            f_t_prev_out1 = f_t_prev_out * f_t_prev_RS_weight[:, :1, :, :]
+            f_t_prev_out2 = f_t_prev_out * f_t_prev_RS_weight[:, 1:, :, :]
+            f_t_prev_out = f_t_prev_out1 + f_t_prev_out2  
+
+            # Action Prediction
+            net_out = self.classifier3(f_t_out, f_t_prev_out)
+            
             act_tprev=act_tprev.to(torch.long)
             #print(act_tprev)
             actions_one_hot = torch.squeeze(F.one_hot(act_tprev, env_action_space_size)).float()  
             #print(net_out, actions_one_hot)
             loss3 = nn.MSELoss()(net_out, actions_one_hot)
             #print(loss1, loss2, loss3)
-            loss = loss1 + loss2 + loss3*0.5
+            loss = loss1 + loss2 + loss3
             ##############################################
-
-            #loss = loss1 + loss2  # Baseline Loss
+ 
 
             if mode == "train":
                 self.optimizer.zero_grad()
                 loss.backward()
-                self.optimizer.step()
+                self.optimizer.step()               
 
             epoch_loss += loss.detach().item()
             epoch_loss1 += loss1.detach().item()
@@ -145,10 +181,10 @@ class InfoNCESpatioTemporalTrainer(Trainer):
     def train(self, tr_eps, val_eps, tr_acts, val_acts):
         # TODO: Make it work for all modes, right now only it defaults to pcl.
         for e in range(self.epochs):
-            self.encoder.train(), self.classifier1.train(), self.classifier2.train(), self.classifier3.train()
+            self.encoder.train(), self.classifier1.train(), self.classifier2.train(), self.classifier3.train(), self.Region_Sensitive_Module.train()
             self.do_one_epoch(e, tr_eps, tr_acts)
 
-            self.encoder.eval(), self.classifier1.eval(), self.classifier2.eval(), self.classifier3.eval()
+            self.encoder.eval(), self.classifier1.eval(), self.classifier2.eval(), self.classifier3.eval(), self.Region_Sensitive_Module.eval()
             self.do_one_epoch(e, val_eps, val_acts)
 
             if self.early_stopper.early_stop:

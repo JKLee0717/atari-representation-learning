@@ -109,7 +109,7 @@ class NatureCNN(nn.Module):
                                nn.init.calculate_gain('relu'))
         self.flatten = Flatten()
 
-        if self.downsample:
+        if self.downsample:  
             self.final_conv_size = 32 * 7 * 7
             self.final_conv_shape = (32, 7, 7)
             self.main = nn.Sequential(
@@ -123,7 +123,7 @@ class NatureCNN(nn.Module):
                 init_(nn.Linear(self.final_conv_size, self.feature_size)),
                 #nn.ReLU()
             )
-        else:
+        else:   # default로 돌아가는 net
             self.final_conv_size = 64 * 9 * 6
             self.final_conv_shape = (64, 9, 6)
             self.main = nn.Sequential(
