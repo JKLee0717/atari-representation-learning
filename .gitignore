@@ -125,3 +125,9 @@ tmp/
 *.diff
 *.npz
 stdout.txt
+
+*.zip
+ROMS/
+result.out
+run.sh
+test.py

@@ -12,7 +12,14 @@ from .trainer import Trainer
 from .utils import EarlyStopping
 from torchvision import transforms
 import torchvision.transforms.functional as TF
+from atariari.benchmark.envs import make_vec_envs  # action space 불러오기
+from atariari.methods.utils import get_argparser   # action space 불러오기
 
+############ Action space #############
+parser = get_argparser()
+args = parser.parse_args()
+env_action_space_size = make_vec_envs(args.env_name, args.seed,  args.num_processes, args.num_frame_stack, not args.no_downsample, args.color).action_space.n
+#######################################
 
 class Classifier(nn.Module):
     def __init__(self, num_inputs1, num_inputs2):
@@ -32,12 +39,14 @@ class GlobalInfoNCESpatioTemporalTrainer(Trainer):
         self.epochs = config['epochs']
         self.batch_size = config['batch_size']
         self.device = device
-        self.optimizer = torch.optim.Adam(list(self.classifier1.parameters()) + list(self.encoder.parameters()),
+        self.classifier3 = nn.Linear(self.encoder.hidden_size * 2, env_action_space_size).to(device) 
+
+        self.optimizer = torch.optim.Adam(list(self.classifier1.parameters()) + list(self.encoder.parameters()) + list(self.classifier3.parameters()),
                                           lr=config['lr'], eps=1e-5)
         self.early_stopper = EarlyStopping(patience=self.patience, verbose=False, wandb=self.wandb, name="encoder")
         self.transform = transforms.Compose([Cutout(n_holes=1, length=80)])
 
-    def generate_batch(self, episodes):
+    def generate_batch(self, episodes, acts):
         total_steps = sum([len(e) for e in episodes])
         print('Total Steps: {}'.format(total_steps))
         # Episode sampler
@@ -47,8 +56,10 @@ class GlobalInfoNCESpatioTemporalTrainer(Trainer):
                                self.batch_size, drop_last=True)
         for indices in sampler:
             episodes_batch = [episodes[x] for x in indices]
-            x_t, x_tprev, x_that, ts, thats = [], [], [], [], []
-            for episode in episodes_batch:
+            acts_batch = [acts[x] for x in indices]
+            x_t, x_tprev, x_that, ts, thats, act_tprev = [], [], [], [], [], []
+            for i, episode in enumerate(episodes_batch):
+                act = acts_batch[i]
                 # Get one sample from this episode
                 t, t_hat = 0, 0
                 t, t_hat = np.random.randint(0, len(episode)), np.random.randint(0, len(episode))
@@ -62,18 +73,18 @@ class GlobalInfoNCESpatioTemporalTrainer(Trainer):
                 x_tprev.append(episode[t - 1])
                 # np.random.seed(seed)
                 #x_that.append(episode[t_hat])
-
+                act_tprev.append(act[t])
                 ts.append([t])
                 #thats.append([t_hat])
-            yield torch.stack(x_t).float().to(self.device) / 255., torch.stack(x_tprev).float().to(self.device) / 255.
+            yield torch.stack(x_t).float().to(self.device) / 255., torch.stack(x_tprev).float().to(self.device) / 255. , torch.stack(act_tprev).float().to(self.device)
 
-    def do_one_epoch(self, epoch, episodes):
+    def do_one_epoch(self, epoch, episodes, acts):
         mode = "train" if self.encoder.training and self.classifier1.training else "val"
         epoch_loss, accuracy, steps = 0., 0., 0
         accuracy1, accuracy2 = 0., 0.
         epoch_loss1, epoch_loss2 = 0., 0.
-        data_generator = self.generate_batch(episodes)
-        for x_t, x_tprev in data_generator:
+        data_generator = self.generate_batch(episodes, acts)
+        for x_t, x_tprev, act_tprev in data_generator:
             f_t_maps, f_t_prev_maps = self.encoder(x_t, fmaps=True), self.encoder(x_tprev, fmaps=True)
 
             # Loss 1: Global at time t, f5 patches at time t-1
@@ -83,7 +94,14 @@ class GlobalInfoNCESpatioTemporalTrainer(Trainer):
             predictions = self.classifier1(f_t)
             logits = torch.matmul(predictions, f_t_prev.t())
             step_loss = F.cross_entropy(logits, torch.arange(N).to(self.device))
-            loss = step_loss
+
+            x = torch.cat([f_t, f_t_prev], dim=1) 
+            net_out = self.classifier3(x)
+            act_tprev=act_tprev.to(torch.long)
+            actions_one_hot = torch.squeeze(F.one_hot(act_tprev, env_action_space_size)).float()  
+            loss3 = nn.MSELoss()(net_out, actions_one_hot)
+
+            loss = step_loss + loss3
 
             self.optimizer.zero_grad()
             if mode == "train":
@@ -100,14 +118,14 @@ class GlobalInfoNCESpatioTemporalTrainer(Trainer):
         if mode == "val":
             self.early_stopper(-epoch_loss / steps, self.encoder)
 
-    def train(self, tr_eps, val_eps):
+    def train(self, tr_eps, val_eps, tr_acts, val_acts):
         # TODO: Make it work for all modes, right now only it defaults to pcl.
         for e in range(self.epochs):
-            self.encoder.train(), self.classifier1.train()
-            self.do_one_epoch(e, tr_eps)
+            self.encoder.train(), self.classifier1.train(), self.classifier3.train()
+            self.do_one_epoch(e, tr_eps, tr_acts)
 
-            self.encoder.eval(), self.classifier1.eval()
-            self.do_one_epoch(e, val_eps)
+            self.encoder.eval(), self.classifier1.eval(), self.classifier3.eval()
+            self.do_one_epoch(e, val_eps, val_acts)
 
             if self.early_stopper.early_stop:
                 break

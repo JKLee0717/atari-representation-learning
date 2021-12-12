@@ -7,6 +7,7 @@ import time
 import os
 from .envs import make_vec_envs
 from .utils import download_run
+from atariari.methods.utils import get_argparser   # action space 불러오기
 try:
     import wandb
 except:
@@ -30,12 +31,15 @@ checkpointed_steps_full_sorted = [1536, 1076736, 2151936, 3227136, 4302336, 5377
                                   36558336, 37633536, 38708736, 39783936, 40859136, 41934336, 43009536, 44084736,
                                   45159936, 46235136, 47310336, 48385536, 49460736, 49999872]
 
+parser = get_argparser()
+args = parser.parse_args()
 
 def get_random_agent_rollouts(env_name, steps, seed=42, num_processes=1, num_frame_stack=1, downsample=False, color=False):
     envs = make_vec_envs(env_name, seed,  num_processes, num_frame_stack, downsample, color)
     envs.reset()
     episode_rewards = deque(maxlen=10)
 
+    print('Env Namd: {}'.format(args.env_name))
     print('Size of Action Space: {}'.format(envs.action_space.n))  # action space 확인
 
     print('-------Collecting samples----------')

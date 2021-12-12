@@ -8,6 +8,14 @@ import numpy as np
 from torch.utils.data import RandomSampler, BatchSampler
 from .trainer import Trainer
 from .utils import EarlyStopping
+from atariari.benchmark.envs import make_vec_envs  # action space 불러오기
+from atariari.methods.utils import get_argparser   # action space 불러오기
+
+############ Action space #############
+parser = get_argparser()
+args = parser.parse_args()
+env_action_space_size = make_vec_envs(args.env_name, args.seed,  args.num_processes, args.num_frame_stack, not args.no_downsample, args.color).action_space.n
+#######################################
 
 
 class Unflatten(nn.Module):
@@ -137,14 +145,15 @@ class VAETrainer(Trainer):
                 x_t.append(episode[t])
             yield torch.stack(x_t).float().to(self.device) / 255.
 
-    def do_one_epoch(self, epoch, episodes):
+    def do_one_epoch(self, epoch, episodes, acts):
         mode = "train" if self.VAE.training else "val"
         epoch_loss, accuracy, steps = 0., 0., 0
-        data_generator = self.generate_batch(episodes)
+        data_generator = self.generate_batch(episodes, acts)
         for x_t in data_generator:
             with torch.set_grad_enabled(mode == 'train'):
                 x_hat, mu, logvar = self.VAE(x_t)
                 loss = self.loss_fn(x_t, x_hat, mu, logvar)
+                
 
             if mode == "train":
                 self.optimizer.zero_grad()
@@ -160,13 +169,13 @@ class VAETrainer(Trainer):
     #             xim = x_hat.detach().cpu().numpy()[0].transpose(1,2,0)
     #             self.wandb.log({"example_reconstruction": [self.wandb.Image(xim, caption="")]})
 
-    def train(self, tr_eps, val_eps):
+    def train(self, tr_eps, val_eps, tr_acts, val_acts):
         for e in range(self.epochs):
-            self.VAE.train()
-            self.do_one_epoch(e, tr_eps)
+            self.VAE.train(), self.classifier.train()
+            self.do_one_epoch(e, tr_eps, tr_acts)
 
-            self.VAE.eval()
-            self.do_one_epoch(e, val_eps)
+            self.VAE.eval(), self.classifier.eval()
+            self.do_one_epoch(e, tr_eps, tr_acts)
 
             if self.early_stopper.early_stop:
                 break

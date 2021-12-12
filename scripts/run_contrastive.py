@@ -10,11 +10,11 @@ from atariari.methods.global_infonce_stdim import GlobalInfoNCESpatioTemporalTra
 from atariari.methods.global_local_infonce import GlobalLocalInfoNCESpatioTemporalTrainer
 from atariari.methods.jsd_stdim import SpatioTemporalTrainer
 from atariari.methods.utils import get_argparser
-from atariari.methods.encoders import NatureCNN, ImpalaCNN
+from atariari.methods.encoders import NatureCNN, ImpalaCNN, NatureCNN_AMM
 from atariari.methods.cpc import CPCTrainer
 from atariari.methods.vae import VAETrainer
 from atariari.methods.no_action_feedforward_predictor import NaFFPredictorTrainer
-from atariari.methods.stdim import InfoNCESpatioTemporalTrainer
+from atariari.methods.stdim import InfoNCESpatioTemporalTrainer, InfoNCESpatioTemporalTrainer_ARSM
 import wandb
 from atariari.benchmark.episodes import get_episodes
 
@@ -54,7 +54,13 @@ def train_encoder(args):
     elif args.method == "naff":
         trainer = NaFFPredictorTrainer(encoder, config, device=device, wandb=wandb)
     elif args.method == "infonce-stdim":
-        trainer = InfoNCESpatioTemporalTrainer(encoder, config, device=device, wandb=wandb)
+        trainer = InfoNCESpatioTemporalTrainer(encoder, config, device=device, wandb=wandb)  # ABST-DIM AFC
+    elif args.method == "infonce-stdim-ARSM":
+        trainer = InfoNCESpatioTemporalTrainer_ARSM(encoder, config, device=device, wandb=wandb)  # ABST-DIM ARSM
+    elif args.method == "infonce-stdim-AMM":
+        encoder = NatureCNN_AMM(observation_shape[0], args)
+        encoder.to(device)
+        trainer = InfoNCESpatioTemporalTrainer(encoder, config, device=device, wandb=wandb)  # ABST-DIM AMM
     elif args.method == "global-infonce-stdim":
         trainer = GlobalInfoNCESpatioTemporalTrainer(encoder, config, device=device, wandb=wandb)
     elif args.method == "global-local-infonce-stdim":

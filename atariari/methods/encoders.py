@@ -161,6 +161,88 @@ class NatureCNN(nn.Module):
         return out
 
 
+class NatureCNN_AMM(nn.Module):
+
+    def __init__(self, input_channels, args):
+        super().__init__()
+        self.feature_size = args.feature_size
+        self.hidden_size = self.feature_size
+        self.downsample = not args.no_downsample
+        self.input_channels = input_channels
+        self.end_with_relu = args.end_with_relu
+        self.args = args
+        init_ = lambda m: init(m,
+                               nn.init.orthogonal_,
+                               lambda x: nn.init.constant_(x, 0),
+                               nn.init.calculate_gain('relu'))
+        self.flatten = Flatten()
+
+        if self.downsample:
+            self.final_conv_size = 32 * 7 * 7
+            self.final_conv_shape = (32, 7, 7)
+            self.main = nn.Sequential(
+                init_(nn.Conv2d(input_channels, 32, 8, stride=4)),
+                nn.ReLU(),
+                init_(nn.Conv2d(32, 64, 4, stride=2)),
+                nn.ReLU(),
+                init_(nn.Conv2d(64, 32, 3, stride=1)),
+                nn.ReLU(),
+                Flatten(),
+                init_(nn.Linear(self.final_conv_size, self.feature_size)),
+                #nn.ReLU()
+            )
+        else:
+            self.final_conv_size = 64 * 9 * 6
+            self.final_conv_shape = (64, 9, 6)
+            self.Region_Sensitive_Module = nn.Sequential(
+                nn.Conv2d(64, 512, 1),
+                nn.ELU(),
+                nn.Conv2d(512, 2, 1),
+                nn.Sigmoid()
+            )
+            self.main = nn.Sequential(
+                init_(nn.Conv2d(input_channels, 32, 8, stride=4)),
+                nn.ReLU(),
+                init_(nn.Conv2d(32, 64, 4, stride=2)),
+                nn.ReLU(),
+                init_(nn.Conv2d(64, 128, 4, stride=2)),
+                nn.ReLU(),
+                init_(nn.Conv2d(128, 64, 3, stride=1)),  # last conv layer
+            )
+            self.tail = nn.Sequential(
+                nn.ReLU(),
+                Flatten(),
+                init_(nn.Linear(self.final_conv_size, self.feature_size)),
+                #nn.ReLU()
+            )
+
+        self.train()
+
+    @property
+    def local_layer_depth(self):
+        return self.main[4].out_channels
+
+    def forward(self, inputs, fmaps=False):
+        f5 = self.main[:6](inputs)
+        f7 = self.main[6:8](f5)  # last conv layer
+        RS_weight = self.Region_Sensitive_Module(f7)
+        f7_Masked1 = f7 * RS_weight[:, :1, :, :]
+        f7_Masked2 =  f7 * RS_weight[:, 1:, :, :]
+        f7_Masked = f7_Masked1 + f7_Masked2
+        out = self.tail(f7_Masked)
+        if self.end_with_relu:
+            assert self.args.method != "vae", "can't end with relu and use vae!"
+            out = F.relu(out)
+        if fmaps:
+            return {
+                'f5': f5.permute(0, 2, 3, 1),
+                'f7': f7.permute(0, 2, 3, 1),
+                'f7_Masked' : f7_Masked.permute(0, 2, 3, 1),
+                'out': out
+            }
+        return out
+
+
 
 class PPOEncoder(nn.Module):
     def __init__(self, env_name, checkpoint_index):

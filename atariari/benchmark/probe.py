@@ -195,7 +195,7 @@ class ProbeTrainer():
         all_probes_stopped = np.all([early_stopper.early_stop for early_stopper in self.early_stoppers.values()])
         while (not all_probes_stopped) and e < self.epochs:
             epoch_loss, accuracy = self.do_one_epoch(tr_eps, tr_labels)
-            self.log_results(e, epoch_loss, accuracy)
+            #self.log_results(e, epoch_loss, accuracy) 출력 생략!!
 
             val_loss, val_accuracy = self.evaluate(val_eps, val_labels, epoch=e)
             # update all early stoppers
@@ -216,7 +216,7 @@ class ProbeTrainer():
         epoch_loss, accuracy = self.do_one_epoch(val_episodes, val_label_dicts)
         epoch_loss = {"val_" + k: v for k, v in epoch_loss.items()}
         accuracy = {"val_" + k: v for k, v in accuracy.items()}
-        self.log_results(epoch, epoch_loss, accuracy)
+        #self.log_results(epoch, epoch_loss, accuracy) 출력 생략!!
         for k, probe in self.probes.items():
             probe.train()
         return epoch_loss, accuracy
@@ -240,12 +240,13 @@ class ProbeTrainer():
         return acc_dict, f1_dict
 
     def log_results(self, epoch_idx, *dictionaries):
+        
         print("Epoch: {}".format(epoch_idx))
         for dictionary in dictionaries:
             for k, v in dictionary.items():
                 print("\t {}: {:8.4f}".format(k, v))
             print("\t --")
-
+        
 
 def postprocess_raw_metrics(acc_dict, f1_dict):
     acc_overall_avg, f1_overall_avg = compute_dict_average(acc_dict), \
